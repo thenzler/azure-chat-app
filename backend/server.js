@@ -11,6 +11,9 @@ require('dotenv').config();
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Azure OpenAI deployment name
+const DEPLOYMENT_NAME = process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
+
 // Check for required environment variables
 const requiredEnvVars = [
   'AZURE_OPENAI_API_KEY',
@@ -162,7 +165,7 @@ async function handleChatWithDataFeature(message, res) {
     };
     
     log('debug', 'Chat Konfiguration:', { 
-      deployment: process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+      deployment: DEPLOYMENT_NAME,
       dataSource: {
         ...azureSearchDataSource,
         parameters: {
@@ -173,7 +176,6 @@ async function handleChatWithDataFeature(message, res) {
     });
 
     const chatCompletionOptions = {
-      deploymentName: process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
       maxTokens: 800,
       temperature: 0.1,
       messages: [
@@ -186,7 +188,7 @@ async function handleChatWithDataFeature(message, res) {
     // Chat-Anfrage an Azure OpenAI senden
     log('info', 'Sende Anfrage an Azure OpenAI mit Datenquelle');
     const result = await client.getChatCompletions(
-      process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+      DEPLOYMENT_NAME,
       chatCompletionOptions.messages,
       chatCompletionOptions
     );
@@ -228,7 +230,7 @@ async function handleChatWithDataFeature(message, res) {
       try {
         log('debug', 'Sende Korrekturanfrage für fehlende Quellenangaben');
         const correctionResult = await client.getChatCompletions(
-          process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+          DEPLOYMENT_NAME,
           correctionOptions.messages,
           correctionOptions
         );
@@ -304,8 +306,6 @@ Hier sind die relevanten Dokumentausschnitte:
 ${contextText}`;
 
     // 4. API-Anfrage an Azure OpenAI
-    const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
-    
     const requestPayload = {
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
@@ -321,7 +321,7 @@ ${contextText}`;
     log('info', 'Sende direkte Chat-Anfrage an Azure OpenAI');
     
     const result = await client.getChatCompletions(
-      deploymentName,
+      DEPLOYMENT_NAME,
       requestPayload.messages,
       {
         maxTokens: requestPayload.max_tokens,
@@ -355,7 +355,7 @@ ${contextText}`;
         log('debug', 'Sende Korrekturanfrage für fehlende Quellenangaben');
         
         const correctionResult = await client.getChatCompletions(
-          deploymentName,
+          DEPLOYMENT_NAME,
           correctionMessages,
           {
             maxTokens: 800,
@@ -651,7 +651,7 @@ app.post('/api/config/field-mapping', (req, res) => {
 app.listen(PORT, () => {
   console.log(`Server läuft auf Port ${PORT}`);
   console.log(`System-Prompt konfiguriert mit ${SYSTEM_PROMPT.length} Zeichen`);
-  console.log(`Verwendetes Azure OpenAI-Deployment: ${deploymentName}`);
+  console.log(`Verwendetes Azure OpenAI-Deployment: ${DEPLOYMENT_NAME}`);
   console.log(`Verwendeter Azure AI Search-Index: ${process.env.AZURE_SEARCH_INDEX_NAME}`);
   console.log(`Gesundheitscheck verfügbar unter http://localhost:${PORT}/health`);
   console.log(`Suchtest verfügbar unter http://localhost:${PORT}/api/test-search?q=ihre+suchanfrage`);
