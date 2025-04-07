@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Azure AI Chat</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="chat-container">
+        <!-- Chat Header -->
+        <header class="chat-header">
+            <h1>Azure AI Chat</h1>
+        </header>
+        
+        <!-- Messages Container -->
+        <div class="messages-container" id="messages-container">
+            <!-- Messages will be added here dynamically -->
+            <div class="welcome-message">
+                <p>Hello! I'm your Azure AI assistant. How can I help you today?</p>
+            </div>
+        </div>
+        
+        <!-- Typing Indicator -->
+        <div class="typing-indicator" id="typing-indicator">
+            <span></span>
+            <span></span>
+            <span></span>
+        </div>
+        
+        <!-- Input Footer -->
+        <div class="input-footer">
+            <div class="input-container">
+                <textarea 
+                    id="message-input" 
+                    placeholder="Type your message..." 
+                    rows="1"
+                    aria-label="Message input"></textarea>
+                <button id="send-button" aria-label="Send message" disabled>
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="22" y1="2" x2="11" y2="13"></line>
+                        <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                    </svg>
+                </button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="script.js"></script>
+</body>
+</html>
