@@ -108,8 +108,12 @@ async function sendMessage() {
         // Hide typing indicator
         hideTypingIndicator();
         
-        // Add bot message to chat
-        addMessageToChat('bot', data.reply);
+        // Add bot message to chat with sources if available
+        if (data.sources && data.sources.length > 0) {
+            addMessageWithSources('bot', data.reply, data.sources);
+        } else {
+            addMessageToChat('bot', data.reply);
+        }
         
     } catch (error) {
         console.error('Error:', error);
@@ -146,11 +150,66 @@ function addMessageToChat(sender, content) {
 }
 
 /**
+ * Add a message with source citations to the chat
+ */
+function addMessageWithSources(sender, content, sources) {
+    const messageElement = document.createElement('div');
+    messageElement.classList.add('message', sender === 'user' ? 'user-message' : 'bot-message');
+    
+    const timestamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    
+    // Format the content with highlighted source tags
+    const formattedContent = formatMessageWithSources(content);
+    
+    let sourceListHTML = '';
+    if (sources && sources.length > 0) {
+        sourceListHTML = `
+            <div class="source-list">
+                <div class="source-list-title">Quellen:</div>
+                ${sources.map(source => `
+                    <div class="source-item">
+                        <span class="source-icon">📄</span>
+                        <span>${source.document}, Seite ${source.page}</span>
+                    </div>
+                `).join('')}
+            </div>
+        `;
+    }
+    
+    messageElement.innerHTML = `
+        <div class="message-bubble">
+            ${formattedContent}
+            ${sourceListHTML}
+        </div>
+        <div class="timestamp">${timestamp}</div>
+    `;
+    
+    messagesContainer.appendChild(messageElement);
+    
+    // Scroll to the bottom
+    scrollToBottom();
+}
+
+/**
  * Format message content (handle newlines, etc.)
  */
 function formatMessageContent(content) {
     // Replace newlines with <br> tags
     return content.replace(/\n/g, '<br>');
+}
+
+/**
+ * Format message with highlighted source tags
+ */
+function formatMessageWithSources(content) {
+    // Replace newlines with <br> tags
+    let formatted = content.replace(/\n/g, '<br>');
+    
+    // Highlight source citations
+    formatted = formatted.replace(/\(Quelle: ([^,]+), Seite (\d+)\)/g, 
+        '<span class="source-tag">$1, S.$2</span>');
+    
+    return formatted;
 }
 
 /**
