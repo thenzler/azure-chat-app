@@ -9,6 +9,7 @@
     "index-docs": "node document-indexer.js"
   },
   "dependencies": {
+    "@azure/openai": "^1.0.0-beta.7",
     "@azure/search-documents": "^12.0.0",
     "@azure/storage-blob": "^12.17.0",
     "axios": "^1.6.1",
