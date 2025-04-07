@@ -2,6 +2,7 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
+const { SearchClient, AzureKeyCredential } = require('@azure/search-documents');
 require('dotenv').config();
 
 // Initialize Express app
@@ -12,12 +13,16 @@ const PORT = process.env.PORT || 3000;
 const requiredEnvVars = [
   'AZURE_OPENAI_API_KEY',
   'AZURE_OPENAI_ENDPOINT',
-  'AZURE_OPENAI_DEPLOYMENT_NAME'
+  'AZURE_OPENAI_DEPLOYMENT_NAME',
+  'AZURE_SEARCH_ENDPOINT',
+  'AZURE_SEARCH_API_KEY',
+  'AZURE_SEARCH_INDEX_NAME'
 ];
 
 requiredEnvVars.forEach(varName => {
   if (!process.env[varName]) {
     console.error(`Error: Environment variable ${varName} is not set`);
+    console.error(`Please check your .env file and make sure all required variables are set.`);
     process.exit(1);
   }
 });
@@ -40,9 +45,17 @@ const normalizeEndpoint = (endpoint) => {
   return endpoint;
 };
 
+// Azure OpenAI Konfiguration
 const azureEndpoint = normalizeEndpoint(process.env.AZURE_OPENAI_ENDPOINT);
 const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
 const apiKey = process.env.AZURE_OPENAI_API_KEY;
+
+// Azure Search Konfiguration
+const searchClient = new SearchClient(
+  process.env.AZURE_SEARCH_ENDPOINT,
+  process.env.AZURE_SEARCH_INDEX_NAME,
+  new AzureKeyCredential(process.env.AZURE_SEARCH_API_KEY)
+);
 
 // Enhanced system prompt with even stronger emphasis on citations
 const SYSTEM_PROMPT = `Du bist ein präziser Recherche-Assistent, der NUR auf Deutsch antwortet und AUSSCHLIESSLICH Informationen aus den bereitgestellten Dokumenten verwendet.
@@ -63,6 +76,68 @@ Formatierungsanweisungen:
 
 Die Angabe der Quellen ist VERPFLICHTEND für jede einzelne Information.`;
 
+/**
+ * Funktion zum Abrufen relevanter Dokumente aus Azure AI Search
+ */
+async function retrieveRelevantDocuments(query) {
+  console.log(`Suche nach relevanten Dokumenten für: "${query}"`);
+  
+  try {
+    // Versuche zuerst semantische Suche für bessere Ergebnisse
+    let searchResults;
+    let searchOptions = {
+      select: ["content", "document_name", "page_number", "paragraph_number"],
+      top: 10, // Holt die Top 10 relevantesten Dokumente
+      queryType: "semantic",
+      queryLanguage: "de-de",
+      semanticConfiguration: "default"
+    };
+    
+    try {
+      // Versuche semantische Suche
+      searchResults = await searchClient.search(query, searchOptions);
+      console.log("Semantische Suche erfolgreich durchgeführt.");
+    } catch (error) {
+      // Fallback auf normale Suche, wenn semantische Suche nicht funktioniert
+      console.log("Semantische Suche fehlgeschlagen, verwende Standard-Suche:", error.message);
+      searchOptions.queryType = "full";
+      delete searchOptions.semanticConfiguration;
+      delete searchOptions.queryLanguage;
+      
+      searchResults = await searchClient.search(query, searchOptions);
+      console.log("Standard-Suche erfolgreich durchgeführt.");
+    }
+    
+    const results = [];
+    let contextText = "";
+    
+    // Iteriere durch die gefundenen Dokumente
+    for await (const result of searchResults.results) {
+      // Extrahiere Dokumentinformationen
+      const doc = {
+        content: result.document.content,
+        documentName: result.document.document_name,
+        pageNumber: result.document.page_number,
+        paragraphNumber: result.document.paragraph_number
+      };
+      
+      // Füge zum Kontext hinzu
+      contextText += `Dokument: ${doc.documentName}\n`;
+      contextText += `Seite: ${doc.pageNumber}\n`;
+      contextText += `Inhalt: ${doc.content}\n\n`;
+      
+      results.push(doc);
+    }
+    
+    console.log(`${results.length} relevante Dokumentenabschnitte gefunden.`);
+    
+    return { contextText, documents: results };
+  } catch (error) {
+    console.error("Fehler beim Abrufen relevanter Dokumente:", error);
+    throw error;
+  }
+}
+
 // API endpoint to handle chat requests
 app.post('/api/chat', async (req, res) => {
   try {
@@ -73,8 +148,29 @@ app.post('/api/chat', async (req, res) => {
     }
 
     console.log(`Incoming user message: "${message}"`);
+    
+    // 1. Abrufen relevanter Dokumente aus dem Search Index
+    const { contextText, documents } = await retrieveRelevantDocuments(message);
+    
+    // 2. Überprüfen, ob relevante Dokumente gefunden wurden
+    if (documents.length === 0) {
+      console.log("Keine relevanten Dokumente gefunden.");
+      return res.json({
+        reply: "In den verfügbaren Dokumenten konnte ich keine Informationen zu dieser Frage finden.",
+        sources: []
+      });
+    }
+    
+    // 3. Erstellen des erweiterten Prompts mit Kontext aus den Dokumenten
+    const userPrompt = `Beantworte folgende Frage basierend auf den gegebenen Dokumentausschnitten. Verwende NUR Informationen aus diesen Ausschnitten und gib für jede Information die Quelle mit Dokumentnamen und Seitenzahl an.
 
-    // Configure request to Azure OpenAI API
+Frage: ${message}
+
+Hier sind die relevanten Dokumentausschnitte:
+
+${contextText}`;
+
+    // 4. Configure request to Azure OpenAI API
     const apiUrl = `${azureEndpoint}openai/deployments/${deploymentName}/chat/completions?api-version=2023-05-15`;
     
     console.log(`Making request to Azure OpenAI API at: ${apiUrl}`);
@@ -83,7 +179,7 @@ app.post('/api/chat', async (req, res) => {
     const requestPayload = {
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: message }
+        { role: 'user', content: userPrompt }
       ],
       max_tokens: 800,
       temperature: 0.1, // Very low temperature for more deterministic responses
@@ -145,7 +241,7 @@ app.post('/api/chat', async (req, res) => {
       const correctionPayload = {
         messages: [
           { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: message },
+          { role: 'user', content: userPrompt },
           { role: 'assistant', content: botReply },
           { role: 'user', content: 'Deine Antwort enthält keine Quellenangaben. Bitte wiederhole die gleiche Antwort, aber füge bei jeder Information die Quelle mit Seitenzahl im Format (Quelle: Dokumentname, Seite X) hinzu.' }
         ],
@@ -169,9 +265,12 @@ app.post('/api/chat', async (req, res) => {
       
       // Re-extract sources
       const correctedSources = [];
-      while ((match = sourceRegex.exec(correctedReply)) !== null) {
-        const document = match[1].trim();
-        const page = parseInt(match[2]);
+      let sourceMatch;
+      const correctedSourceRegex = /\(Quelle: ([^,]+), Seite (\d+)\)/g;
+      
+      while ((sourceMatch = correctedSourceRegex.exec(correctedReply)) !== null) {
+        const document = sourceMatch[1].trim();
+        const page = parseInt(sourceMatch[2]);
         
         if (!correctedSources.some(s => s.document === document && s.page === page)) {
           correctedSources.push({ document, page });
@@ -214,10 +313,33 @@ app.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+// Test search functionality
+app.get('/api/test-search', async (req, res) => {
+  try {
+    const query = req.query.q || 'test query';
+    const { documents } = await retrieveRelevantDocuments(query);
+    
+    return res.json({
+      query,
+      documentCount: documents.length,
+      documents: documents.map(d => ({
+        name: d.documentName,
+        page: d.pageNumber,
+        preview: d.content.substring(0, 200) + '...'
+      }))
+    });
+  } catch (error) {
+    console.error('Error testing search:', error);
+    return res.status(500).json({ error: 'Error testing search', details: error.message });
+  }
+});
+
 // Start the server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
   console.log(`System prompt configured with ${SYSTEM_PROMPT.length} characters`);
   console.log(`Using Azure OpenAI deployment: ${deploymentName}`);
+  console.log(`Using Azure AI Search index: ${process.env.AZURE_SEARCH_INDEX_NAME}`);
   console.log(`Health check available at http://localhost:${PORT}/health`);
+  console.log(`Search test available at http://localhost:${PORT}/api/test-search?q=your+query`);
 });
