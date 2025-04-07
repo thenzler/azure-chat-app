@@ -1,0 +1,12 @@
+{
+  "name": "azure-chat-app",
+  "version": "1.0.0",
+  "description": "Full-stack web chat application using Azure OpenAI API",
+  "scripts": {
+    "start": "cd backend && npm start",
+    "install:backend": "cd backend && npm install",
+    "dev": "cd backend && npm run dev"
+  },
+  "author": "",
+  "license": "MIT"
+}
