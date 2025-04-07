@@ -2,7 +2,9 @@
 const express = require('express');
 const cors = require('cors');
 const axios = require('axios');
-const { SearchClient, AzureKeyCredential } = require('@azure/search-documents');
+const { AzureKeyCredential } = require('@azure/core-auth');
+const { OpenAIClient } = require('@azure/openai');
+const { SearchClient } = require('@azure/search-documents');
 require('dotenv').config();
 
 // Initialize Express app
@@ -37,20 +39,29 @@ app.use((req, res, next) => {
   next();
 });
 
-// Normalize Azure OpenAI endpoint URL
-const normalizeEndpoint = (endpoint) => {
-  if (!endpoint.endsWith('/')) {
-    return endpoint + '/';
-  }
-  return endpoint;
+// Configure logging level
+const LOG_LEVEL = process.env.LOG_LEVEL || 'info';
+const logLevels = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
 };
 
-// Azure OpenAI Konfiguration
-const azureEndpoint = normalizeEndpoint(process.env.AZURE_OPENAI_ENDPOINT);
-const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
-const apiKey = process.env.AZURE_OPENAI_API_KEY;
+function log(level, ...args) {
+  if (logLevels[level] >= logLevels[LOG_LEVEL]) {
+    const timestamp = new Date().toISOString();
+    console[level](`[${timestamp}] [${level.toUpperCase()}]`, ...args);
+  }
+}
 
-// Azure Search Konfiguration
+// Azure OpenAI client
+const client = new OpenAIClient(
+  process.env.AZURE_OPENAI_ENDPOINT,
+  new AzureKeyCredential(process.env.AZURE_OPENAI_API_KEY)
+);
+
+// Azure Search client (for direct testing)
 const searchClient = new SearchClient(
   process.env.AZURE_SEARCH_ENDPOINT,
   process.env.AZURE_SEARCH_INDEX_NAME,
@@ -76,115 +87,6 @@ Formatierungsanweisungen:
 
 Die Angabe der Quellen ist VERPFLICHTEND für jede einzelne Information.`;
 
-/**
- * Funktion zum Abrufen relevanter Dokumente aus Azure AI Search
- */
-async function retrieveRelevantDocuments(query) {
-  console.log(`Suche nach relevanten Dokumenten für: "${query}"`);
-  
-  try {
-    // Verbesserte Suche für bessere Ergebnisse
-    let searchOptions = {
-      select: ["content", "document_name", "page_number", "paragraph_number"],
-      top: 15, // Mehr Dokumente für besseren Kontext
-      queryType: "full" // Standardmäßig full-text search
-    };
-    
-    // Versuche zuerst semantische Suche, wenn verfügbar
-    try {
-      // Versuche semantische Suche, wenn konfiguriert
-      if (process.env.USE_SEMANTIC_SEARCH === 'true') {
-        searchOptions.queryType = "semantic";
-        searchOptions.queryLanguage = "de-de";
-        searchOptions.semanticConfiguration = "default";
-        console.log("Versuche semantische Suche...");
-      }
-      
-      const searchResults = await searchClient.search(query, searchOptions);
-      console.log("Suche erfolgreich durchgeführt.");
-      
-      const results = [];
-      let contextText = "";
-      
-      // Iteriere durch die gefundenen Dokumente
-      for await (const result of searchResults.results) {
-        // Extrahiere Dokumentinformationen
-        if (!result.document) {
-          console.warn("Warnung: Dokument ohne Inhalt gefunden");
-          continue;
-        }
-        
-        try {
-          const doc = {
-            content: result.document.content || "",
-            documentName: result.document.document_name || "Unbekanntes Dokument",
-            pageNumber: result.document.page_number || 1,
-            paragraphNumber: result.document.paragraph_number || 0
-          };
-          
-          // Füge zum Kontext hinzu
-          contextText += `Dokument: ${doc.documentName}\n`;
-          contextText += `Seite: ${doc.pageNumber}\n`;
-          contextText += `Inhalt: ${doc.content}\n\n`;
-          
-          results.push(doc);
-        } catch (docError) {
-          console.error("Fehler beim Verarbeiten eines Dokumentergebnisses:", docError);
-        }
-      }
-      
-      console.log(`${results.length} relevante Dokumentenabschnitte gefunden.`);
-      
-      return { contextText, documents: results };
-      
-    } catch (searchError) {
-      console.error("Fehler bei der Suche:", searchError);
-      
-      // Versuch eines Fallbacks auf eine einfachere Suchmethode bei Problemen
-      console.log("Versuche einfachere Suche ohne spezielle Parameter...");
-      
-      // Letzte Chance: Basiskonfiguration ohne spezielle Parameter
-      const basicResults = await searchClient.search(query, {
-        select: ["content", "document_name", "page_number", "paragraph_number"],
-        top: 10
-      });
-      
-      const results = [];
-      let contextText = "";
-      
-      for await (const result of basicResults.results) {
-        if (!result.document) continue;
-        
-        const doc = {
-          content: result.document.content || "",
-          documentName: result.document.document_name || "Unbekanntes Dokument",
-          pageNumber: result.document.page_number || 1,
-          paragraphNumber: result.document.paragraph_number || 0
-        };
-        
-        contextText += `Dokument: ${doc.documentName}\n`;
-        contextText += `Seite: ${doc.pageNumber}\n`;
-        contextText += `Inhalt: ${doc.content}\n\n`;
-        
-        results.push(doc);
-      }
-      
-      console.log(`${results.length} relevante Dokumentenabschnitte mit einfacher Suche gefunden.`);
-      
-      return { contextText, documents: results };
-    }
-  } catch (error) {
-    console.error("Kritischer Fehler beim Abrufen relevanter Dokumente:", error);
-    console.error("Azure Search Client Verbindungsdaten überprüfen:");
-    console.error(`- Endpoint: ${process.env.AZURE_SEARCH_ENDPOINT}`);
-    console.error(`- Index Name: ${process.env.AZURE_SEARCH_INDEX_NAME}`);
-    console.error(`- API Key: ${process.env.AZURE_SEARCH_API_KEY ? '(Set)' : '(Not Set)'}`);
-    
-    // Rückgabe leerer Ergebnisse im Fehlerfall
-    return { contextText: "", documents: [] };
-  }
-}
-
 // API endpoint to handle chat requests
 app.post('/api/chat', async (req, res) => {
   try {
@@ -194,190 +96,34 @@ app.post('/api/chat', async (req, res) => {
       return res.status(400).json({ error: 'Message is required' });
     }
 
-    console.log(`Neue Benutzeranfrage: "${message}"`);
+    log('info', `Neue Benutzeranfrage: "${message}"`);
     
     try {
-      // 1. Abrufen relevanter Dokumente aus dem Search Index
-      const { contextText, documents } = await retrieveRelevantDocuments(message);
+      // Check which approach to use
+      const useDataFeature = process.env.USE_AZURE_OPENAI_DATA_FEATURE === 'true';
       
-      // 2. Überprüfen, ob relevante Dokumente gefunden wurden
-      if (documents.length === 0) {
-        console.log("Keine relevanten Dokumente gefunden.");
-        
-        // Noch einen Versuch mit einer einfacheren Suche
-        const simpleQuery = message.split(' ').slice(0, 3).join(' '); // Ersten 3 Wörter
-        console.log(`Versuche einfachere Suche mit: "${simpleQuery}"`);
-        
-        const simpleSearch = await retrieveRelevantDocuments(simpleQuery);
-        
-        if (simpleSearch.documents.length === 0) {
-          return res.json({
-            reply: "In den verfügbaren Dokumenten konnte ich keine Informationen zu dieser Frage finden.",
-            sources: []
-          });
-        } else {
-          // Fahre mit den einfacher gefundenen Dokumenten fort
-          console.log(`Alternative Suche fand ${simpleSearch.documents.length} Dokumente.`);
-          contextText = simpleSearch.contextText;
-          documents = simpleSearch.documents;
-        }
+      if (useDataFeature) {
+        log('info', 'Verwende native Azure OpenAI "Your Data"-Funktion');
+        await handleChatWithDataFeature(message, res);
+      } else {
+        log('info', 'Verwende manuelle Suche und Kontext-Erstellung');
+        await handleChatWithManualSearch(message, res);
       }
-      
-      // 3. Erstellen des erweiterten Prompts mit Kontext aus den Dokumenten
-      const userPrompt = `Beantworte folgende Frage basierend auf den gegebenen Dokumentausschnitten. Verwende NUR Informationen aus diesen Ausschnitten und gib für jede Information die Quelle mit Dokumentnamen und Seitenzahl an.
-
-Frage: ${message}
-
-Hier sind die relevanten Dokumentausschnitte:
-
-${contextText}`;
-
-      // 4. Configure request to Azure OpenAI API
-      const apiUrl = `${azureEndpoint}openai/deployments/${deploymentName}/chat/completions?api-version=2023-05-15`;
-      
-      console.log(`OpenAI API Anfrage an: ${apiUrl}`);
-      console.log(`Verwendetes Deployment: ${deploymentName}`);
-      
-      const requestPayload = {
-        messages: [
-          { role: 'system', content: SYSTEM_PROMPT },
-          { role: 'user', content: userPrompt }
-        ],
-        max_tokens: 800,
-        temperature: 0.1, // Very low temperature for more deterministic responses
-        top_p: 0.95,      // High top_p for more focused responses
-        frequency_penalty: 0.0,
-        presence_penalty: 0.0
-      };
-      
-      console.log('Sende Anfrage an Azure OpenAI...');
-      
-      const response = await axios.post(
-        apiUrl,
-        requestPayload,
-        {
-          headers: {
-            'Content-Type': 'application/json',
-            'api-key': apiKey
-          }
-        }
-      );
-
-      console.log('Antwort von Azure OpenAI erhalten');
-      
-      // Ensure we got a valid response
-      if (!response.data || !response.data.choices || response.data.choices.length === 0) {
-        console.error('Ungültiges Antwortformat:', response.data);
-        return res.status(500).json({ 
-          error: 'Ungültige Antwort von Azure OpenAI API', 
-          details: 'Die Antwort enthielt keine erwarteten Daten' 
-        });
-      }
-
-      // Extract the bot's reply
-      const botReply = response.data.choices[0].message.content;
-      console.log(`Bot-Antwort: "${botReply.substring(0, 100)}..."`);
-      
-      // Extract sources for additional metadata
-      const sources = [];
-      const sourceRegex = /\(Quelle: ([^,]+), Seite (\d+)\)/g;
-      let match;
-      
-      while ((match = sourceRegex.exec(botReply)) !== null) {
-        const document = match[1].trim();
-        const page = parseInt(match[2]);
-        
-        // Only add unique sources
-        if (!sources.some(s => s.document === document && s.page === page)) {
-          sources.push({ document, page });
-        }
-      }
-      
-      console.log(`${sources.length} eindeutige Quellen extrahiert`);
-      
-      // Check if we need to enforce the citation requirement
-      if (sources.length === 0 && botReply.length > 50 && !botReply.includes("keine Informationen zu dieser Frage finden")) {
-        console.warn("Antwort enthält keine Quellenangaben, fordere Korrektur an");
-        
-        // Make a follow-up request to correct the issue
-        const correctionPayload = {
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: userPrompt },
-            { role: 'assistant', content: botReply },
-            { role: 'user', content: 'Deine Antwort enthält keine Quellenangaben. Bitte wiederhole die gleiche Antwort, aber füge bei jeder Information die Quelle mit Seitenzahl im Format (Quelle: Dokumentname, Seite X) hinzu.' }
-          ],
-          max_tokens: 800,
-          temperature: 0.0 // Zero temperature for maximum determinism
-        };
-        
-        console.log('Sende Korrekturanfrage für fehlende Quellenangaben...');
-        
-        try {
-          const correctionResponse = await axios.post(
-            apiUrl,
-            correctionPayload,
-            {
-              headers: {
-                'Content-Type': 'application/json',
-                'api-key': apiKey
-              }
-            }
-          );
-          
-          const correctedReply = correctionResponse.data.choices[0].message.content;
-          console.log(`Korrigierte Antwort: "${correctedReply.substring(0, 100)}..."`);
-          
-          // Re-extract sources
-          const correctedSources = [];
-          let sourceMatch;
-          const correctedSourceRegex = /\(Quelle: ([^,]+), Seite (\d+)\)/g;
-          
-          while ((sourceMatch = correctedSourceRegex.exec(correctedReply)) !== null) {
-            const document = sourceMatch[1].trim();
-            const page = parseInt(sourceMatch[2]);
-            
-            if (!correctedSources.some(s => s.document === document && s.page === page)) {
-              correctedSources.push({ document, page });
-            }
-          }
-          
-          return res.json({ 
-            reply: correctedReply,
-            sources: correctedSources
-          });
-        } catch (correctionError) {
-          console.error('Fehler bei der Korrekturanfrage:', correctionError);
-          console.log('Sende ursprüngliche Antwort ohne Korrektur.');
-          
-          // Fallback zur originalen Antwort bei Fehler
-          return res.json({ 
-            reply: botReply,
-            sources: sources
-          });
-        }
-      }
-      
-      return res.json({ 
-        reply: botReply,
-        sources: sources
-      });
     } catch (innerError) {
-      console.error('Innerer Fehler bei der Verarbeitung:', innerError);
-      throw innerError; // Weitergabe an äußere Fehlerbehandlung
+      log('error', 'Fehler bei der Verarbeitung der Anfrage:', innerError);
+      throw innerError;
     }
-    
   } catch (error) {
-    console.error('Fehler bei der Kommunikation mit der Azure OpenAI API:', error.message);
+    log('error', 'Fehler bei der Kommunikation mit der Azure OpenAI API:', error.message);
     
     // Provide more detailed error information for debugging
     if (error.response) {
-      console.error('Response status:', error.response.status);
-      console.error('Response data:', error.response.data);
+      log('error', 'Response status:', error.response.status);
+      log('error', 'Response data:', error.response.data);
     } else if (error.request) {
-      console.error('Keine Antwort erhalten, Anfrage war:', error.request);
+      log('error', 'Keine Antwort erhalten, Anfrage war:', error.request);
     } else {
-      console.error('Fehler beim Einrichten der Anfrage:', error.message);
+      log('error', 'Fehler beim Einrichten der Anfrage:', error.message);
     }
     
     return res.status(500).json({ 
@@ -386,6 +132,402 @@ ${contextText}`;
     });
   }
 });
+
+/**
+ * Verarbeitet Chat-Anfragen mit der nativen Azure OpenAI "Your Data"-Funktion
+ */
+async function handleChatWithDataFeature(message, res) {
+  try {
+    log('debug', 'Starte Chat mit nativer "Your Data"-Funktion');
+    
+    // Konfiguration für die Datenbankverbindung
+    const azureSearchDataSource = {
+      type: process.env.AZURE_SEARCH_DATA_SOURCE_TYPE || "azure_search",
+      parameters: {
+        endpoint: process.env.AZURE_SEARCH_ENDPOINT,
+        key: process.env.AZURE_SEARCH_API_KEY,
+        indexName: process.env.AZURE_SEARCH_INDEX_NAME,
+        semanticConfiguration: process.env.USE_SEMANTIC_SEARCH === 'true' ? "default" : "",
+        queryType: process.env.USE_SEMANTIC_SEARCH === 'true' ? "semantic" : "simple",
+        fieldsMapping: {
+          contentFields: ["content"],
+          titleField: "document_name",
+          urlField: "",
+          filepathField: "",
+          vectorFields: []
+        },
+        inScope: true,
+        roleInformation: SYSTEM_PROMPT
+      }
+    };
+    
+    log('debug', 'Chat Konfiguration:', { 
+      deployment: process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+      dataSource: {
+        ...azureSearchDataSource,
+        parameters: {
+          ...azureSearchDataSource.parameters,
+          key: "***" // API-Schlüssel aus Logs ausblenden
+        }
+      }
+    });
+
+    const chatCompletionOptions = {
+      deploymentName: process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+      maxTokens: 800,
+      temperature: 0.1,
+      messages: [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: message }
+      ],
+      dataSources: [azureSearchDataSource]
+    };
+
+    // Chat-Anfrage an Azure OpenAI senden
+    log('info', 'Sende Anfrage an Azure OpenAI mit Datenquelle');
+    const result = await client.getChatCompletions(
+      process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+      chatCompletionOptions.messages,
+      chatCompletionOptions
+    );
+
+    if (!result || !result.choices || result.choices.length === 0) {
+      log('error', 'Ungültige Antwort von Azure OpenAI:', result);
+      return res.status(500).json({
+        error: 'Ungültige Antwort von Azure OpenAI',
+        details: 'Die Antwort enthielt keine erwarteten Daten'
+      });
+    }
+
+    // Antwort extrahieren
+    const botReply = result.choices[0].message.content;
+    log('info', `Bot-Antwort: "${botReply.substring(0, 100)}..."`);
+
+    // Quellen aus der Antwort extrahieren
+    const sources = extractSourcesFromText(botReply);
+    log('info', `${sources.length} eindeutige Quellen extrahiert`);
+
+    // Überprüfen, ob Quellenangaben fehlen
+    if (sources.length === 0 && botReply.length > 50 && !botReply.includes("keine Informationen zu dieser Frage finden")) {
+      log('warn', "Antwort enthält keine Quellenangaben, fordere Korrektur an");
+      
+      // Erneute Anfrage mit Hinweis auf fehlende Quellenangaben
+      const correctionMessages = [
+        { role: "system", content: SYSTEM_PROMPT },
+        { role: "user", content: message },
+        { role: "assistant", content: botReply },
+        { role: "user", content: "Deine Antwort enthält keine Quellenangaben. Bitte wiederhole die gleiche Antwort, aber füge bei jeder Information die Quelle mit Seitenzahl im Format (Quelle: Dokumentname, Seite X) hinzu." }
+      ];
+
+      const correctionOptions = {
+        ...chatCompletionOptions,
+        messages: correctionMessages,
+        temperature: 0 // Niedrigere Temperatur für deterministische Antwort
+      };
+
+      try {
+        log('debug', 'Sende Korrekturanfrage für fehlende Quellenangaben');
+        const correctionResult = await client.getChatCompletions(
+          process.env.AZURE_OPENAI_DEPLOYMENT_NAME,
+          correctionOptions.messages,
+          correctionOptions
+        );
+
+        const correctedReply = correctionResult.choices[0].message.content;
+        log('info', `Korrigierte Antwort: "${correctedReply.substring(0, 100)}..."`);
+
+        // Quellen aus der korrigierten Antwort extrahieren
+        const correctedSources = extractSourcesFromText(correctedReply);
+        log('info', `${correctedSources.length} Quellen nach Korrektur gefunden`);
+
+        return res.json({
+          reply: correctedReply,
+          sources: correctedSources
+        });
+      } catch (correctionError) {
+        log('error', 'Fehler bei der Korrekturanfrage:', correctionError);
+        log('warn', 'Sende ursprüngliche Antwort ohne Korrektur');
+      }
+    }
+
+    // Antwort senden
+    return res.json({
+      reply: botReply,
+      sources: sources
+    });
+  } catch (error) {
+    log('error', 'Fehler bei der Verwendung der "Your Data"-Funktion:', error);
+    throw error;
+  }
+}
+
+/**
+ * Fallback-Methode: Verarbeitet Chat-Anfragen mit manueller Suche und Kontext-Erstellung
+ */
+async function handleChatWithManualSearch(message, res) {
+  try {
+    log('debug', 'Starte Chat mit manueller Suche');
+    
+    // 1. Relevante Dokumente aus dem Suchindex abrufen
+    const { contextText, documents } = await retrieveRelevantDocuments(message);
+    
+    // 2. Prüfen, ob Dokumente gefunden wurden
+    if (documents.length === 0) {
+      log('info', "Keine relevanten Dokumente gefunden");
+      
+      // Einen Versuch mit einer einfacheren Suche
+      const simpleQuery = message.split(' ').slice(0, 3).join(' '); // Ersten 3 Wörter
+      log('debug', `Versuche einfachere Suche mit: "${simpleQuery}"`);
+      
+      const simpleSearch = await retrieveRelevantDocuments(simpleQuery);
+      
+      if (simpleSearch.documents.length === 0) {
+        return res.json({
+          reply: "In den verfügbaren Dokumenten konnte ich keine Informationen zu dieser Frage finden.",
+          sources: []
+        });
+      } else {
+        // Mit den gefundenen Dokumenten fortfahren
+        log('info', `Alternative Suche fand ${simpleSearch.documents.length} Dokumente`);
+        contextText = simpleSearch.contextText;
+        documents = simpleSearch.documents;
+      }
+    }
+    
+    // 3. Prompt mit Kontext erstellen
+    const userPrompt = `Beantworte folgende Frage basierend auf den gegebenen Dokumentausschnitten. Verwende NUR Informationen aus diesen Ausschnitten und gib für jede Information die Quelle mit Dokumentnamen und Seitenzahl an.
+
+Frage: ${message}
+
+Hier sind die relevanten Dokumentausschnitte:
+
+${contextText}`;
+
+    // 4. API-Anfrage an Azure OpenAI
+    const deploymentName = process.env.AZURE_OPENAI_DEPLOYMENT_NAME;
+    
+    const requestPayload = {
+      messages: [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userPrompt }
+      ],
+      max_tokens: 800,
+      temperature: 0.1,
+      top_p: 0.95,
+      frequency_penalty: 0.0,
+      presence_penalty: 0.0
+    };
+    
+    log('info', 'Sende direkte Chat-Anfrage an Azure OpenAI');
+    
+    const result = await client.getChatCompletions(
+      deploymentName,
+      requestPayload.messages,
+      {
+        maxTokens: requestPayload.max_tokens,
+        temperature: requestPayload.temperature,
+        topP: requestPayload.top_p,
+        frequencyPenalty: requestPayload.frequency_penalty,
+        presencePenalty: requestPayload.presence_penalty
+      }
+    );
+
+    // Antwort verarbeiten
+    const botReply = result.choices[0].message.content;
+    log('info', `Bot-Antwort: "${botReply.substring(0, 100)}..."`);
+    
+    // Quellen extrahieren
+    const sources = extractSourcesFromText(botReply);
+    log('info', `${sources.length} eindeutige Quellen extrahiert`);
+    
+    // Fehlende Quellenangaben korrigieren
+    if (sources.length === 0 && botReply.length > 50 && !botReply.includes("keine Informationen zu dieser Frage finden")) {
+      log('warn', "Antwort enthält keine Quellenangaben, fordere Korrektur an");
+      
+      const correctionMessages = [
+        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'user', content: userPrompt },
+        { role: 'assistant', content: botReply },
+        { role: 'user', content: 'Deine Antwort enthält keine Quellenangaben. Bitte wiederhole die gleiche Antwort, aber füge bei jeder Information die Quelle mit Seitenzahl im Format (Quelle: Dokumentname, Seite X) hinzu.' }
+      ];
+      
+      try {
+        log('debug', 'Sende Korrekturanfrage für fehlende Quellenangaben');
+        
+        const correctionResult = await client.getChatCompletions(
+          deploymentName,
+          correctionMessages,
+          {
+            maxTokens: 800,
+            temperature: 0.0
+          }
+        );
+        
+        const correctedReply = correctionResult.choices[0].message.content;
+        log('info', `Korrigierte Antwort: "${correctedReply.substring(0, 100)}..."`);
+        
+        const correctedSources = extractSourcesFromText(correctedReply);
+        log('info', `${correctedSources.length} Quellen nach Korrektur gefunden`);
+        
+        return res.json({
+          reply: correctedReply,
+          sources: correctedSources
+        });
+      } catch (correctionError) {
+        log('error', 'Fehler bei der Korrekturanfrage:', correctionError);
+        log('warn', 'Sende ursprüngliche Antwort ohne Korrektur');
+      }
+    }
+    
+    return res.json({
+      reply: botReply,
+      sources: sources
+    });
+    
+  } catch (error) {
+    log('error', 'Fehler bei der manuellen Suche und Kontexterstellung:', error);
+    throw error;
+  }
+}
+
+/**
+ * Extrahiert Quellenangaben aus dem Text im Format (Quelle: Dokumentname, Seite X)
+ */
+function extractSourcesFromText(text) {
+  const sources = [];
+  const sourceRegex = /\(Quelle: ([^,]+), Seite (\d+)\)/g;
+  let match;
+  
+  while ((match = sourceRegex.exec(text)) !== null) {
+    const document = match[1].trim();
+    const page = parseInt(match[2]);
+    
+    // Nur eindeutige Quellen hinzufügen
+    if (!sources.some(s => s.document === document && s.page === page)) {
+      sources.push({ document, page });
+    }
+  }
+  
+  return sources;
+}
+
+/**
+ * Ruft relevante Dokumente aus dem Azure AI Search-Index ab
+ */
+async function retrieveRelevantDocuments(query) {
+  log('debug', `Suche nach relevanten Dokumenten für: "${query}"`);
+  
+  try {
+    // Suchoptionen konfigurieren
+    let searchOptions = {
+      select: ["content", "document_name", "page_number", "paragraph_number"],
+      top: 15,
+      queryType: "full"
+    };
+    
+    // Semantische Suche verwenden, falls aktiviert
+    if (process.env.USE_SEMANTIC_SEARCH === 'true') {
+      searchOptions.queryType = "semantic";
+      searchOptions.queryLanguage = "de-de";
+      searchOptions.semanticConfiguration = "default";
+      log('debug', "Verwende semantische Suche");
+    }
+    
+    // Suche ausführen
+    try {
+      const searchResults = await searchClient.search(query, searchOptions);
+      
+      const results = [];
+      let contextText = "";
+      
+      // Dokumentergebnisse verarbeiten
+      for await (const result of searchResults.results) {
+        if (!result.document) {
+          log('warn', "Warnung: Dokument ohne Inhalt gefunden");
+          continue;
+        }
+        
+        try {
+          // Feldnamen anpassen (falls sie in Ihrem Index anders sind)
+          const doc = {
+            content: result.document.content || result.document.text || "",
+            documentName: result.document.document_name || result.document.title || "Unbekanntes Dokument",
+            pageNumber: result.document.page_number || result.document.page || 1,
+            paragraphNumber: result.document.paragraph_number || result.document.paragraph || 0
+          };
+          
+          // Kontext für die Anfrage aufbauen
+          contextText += `Dokument: ${doc.documentName}\n`;
+          contextText += `Seite: ${doc.pageNumber}\n`;
+          contextText += `Inhalt: ${doc.content}\n\n`;
+          
+          results.push(doc);
+        } catch (docError) {
+          log('error', "Fehler beim Verarbeiten eines Dokumentergebnisses:", docError);
+        }
+      }
+      
+      log('info', `${results.length} relevante Dokumentenabschnitte gefunden`);
+      
+      return { contextText, documents: results };
+      
+    } catch (searchError) {
+      log('error', "Fehler bei der Suche:", searchError);
+      
+      // Fallback auf einfachere Suche
+      log('warn', "Versuche einfachere Suche ohne spezielle Parameter");
+      
+      const basicResults = await searchClient.search(query, {
+        select: ["*"],
+        top: 10
+      });
+      
+      const results = [];
+      let contextText = "";
+      
+      for await (const result of basicResults.results) {
+        if (!result.document) continue;
+        
+        // Versuch, die Felder dynamisch zu identifizieren
+        const docFields = Object.keys(result.document);
+        log('debug', `Verfügbare Felder: ${docFields.join(', ')}`);
+        
+        // Inhaltsfeld identifizieren (content oder text)
+        const contentField = docFields.find(f => f === 'content' || f === 'text' || f.includes('content') || f.includes('text'));
+        // Titel identifizieren (document_name, title, name)
+        const titleField = docFields.find(f => f === 'document_name' || f === 'title' || f === 'name' || f.includes('name') || f.includes('title'));
+        // Seitennummer identifizieren (page_number, page)
+        const pageField = docFields.find(f => f === 'page_number' || f === 'page' || f.includes('page'));
+        
+        const doc = {
+          content: contentField ? result.document[contentField] : "Kein Inhalt",
+          documentName: titleField ? result.document[titleField] : "Unbekanntes Dokument",
+          pageNumber: pageField ? parseInt(result.document[pageField]) || 1 : 1,
+          paragraphNumber: 0
+        };
+        
+        contextText += `Dokument: ${doc.documentName}\n`;
+        contextText += `Seite: ${doc.pageNumber}\n`;
+        contextText += `Inhalt: ${doc.content}\n\n`;
+        
+        results.push(doc);
+      }
+      
+      log('info', `${results.length} relevante Dokumentenabschnitte mit einfacher Suche gefunden`);
+      
+      return { contextText, documents: results };
+    }
+  } catch (error) {
+    log('error', "Kritischer Fehler beim Abrufen relevanter Dokumente:", error);
+    log('error', "Azure Search Client Verbindungsdaten überprüfen:");
+    log('error', `- Endpoint: ${process.env.AZURE_SEARCH_ENDPOINT}`);
+    log('error', `- Index Name: ${process.env.AZURE_SEARCH_INDEX_NAME}`);
+    log('error', `- API Key: ${process.env.AZURE_SEARCH_API_KEY ? '(Set)' : '(Not Set)'}`);
+    
+    // Leere Ergebnisse im Fehlerfall zurückgeben
+    return { contextText: "", documents: [] };
+  }
+}
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -425,8 +567,84 @@ app.get('/api/debug/search-config', (req, res) => {
     indexName: process.env.AZURE_SEARCH_INDEX_NAME,
     keyPresent: !!process.env.AZURE_SEARCH_API_KEY,
     keyPreview: maskedKey,
-    semanticSearchEnabled: process.env.USE_SEMANTIC_SEARCH === 'true'
+    semanticSearchEnabled: process.env.USE_SEMANTIC_SEARCH === 'true',
+    useDataFeature: process.env.USE_AZURE_OPENAI_DATA_FEATURE === 'true'
   });
+});
+
+// Advanced debug endpoint - checks connection and index schema
+app.get('/api/debug/index-structure', async (req, res) => {
+  try {
+    // Einfache Suche, um ein Dokument zu erhalten
+    log('debug', 'Prüfe Index-Struktur mit Beispielanfrage');
+    const searchResults = await searchClient.search("*", { top: 1 });
+    
+    let sampleDoc = null;
+    let fieldNames = [];
+    let totalDocs = 0;
+    
+    for await (const result of searchResults.results) {
+      totalDocs++;
+      if (!sampleDoc && result.document) {
+        sampleDoc = result.document;
+        fieldNames = Object.keys(result.document);
+      }
+    }
+    
+    // Dynamische Felder identifizieren
+    const identifiedFields = {
+      contentField: fieldNames.find(f => f === 'content' || f === 'text' || f.includes('content') || f.includes('text')),
+      titleField: fieldNames.find(f => f === 'document_name' || f === 'title' || f === 'name' || f.includes('name') || f.includes('title')),
+      pageField: fieldNames.find(f => f === 'page_number' || f === 'page' || f.includes('page'))
+    };
+    
+    return res.json({
+      indexName: process.env.AZURE_SEARCH_INDEX_NAME,
+      documentsFound: totalDocs,
+      fieldNames: fieldNames,
+      identifiedFields: identifiedFields,
+      sampleDocument: sampleDoc,
+      isConnected: true
+    });
+  } catch (error) {
+    log('error', 'Fehler beim Prüfen der Index-Struktur:', error);
+    return res.status(500).json({ 
+      error: 'Fehler beim Prüfen der Index-Struktur', 
+      details: error.message,
+      isConnected: false
+    });
+  }
+});
+
+// Index field mapping config endpoint
+app.post('/api/config/field-mapping', (req, res) => {
+  try {
+    const { contentField, titleField, pageField } = req.body;
+    
+    if (!contentField) {
+      return res.status(400).json({ error: 'contentField ist erforderlich' });
+    }
+    
+    // Speichern Sie die Konfiguration in Umgebungsvariablen
+    process.env.FIELD_MAPPING_CONTENT = contentField;
+    process.env.FIELD_MAPPING_TITLE = titleField || 'document_name';
+    process.env.FIELD_MAPPING_PAGE = pageField || 'page_number';
+    
+    log('info', `Feldmappings aktualisiert: content=${contentField}, title=${titleField}, page=${pageField}`);
+    
+    return res.json({ 
+      success: true, 
+      message: 'Feldmappings erfolgreich aktualisiert',
+      mapping: {
+        contentField: process.env.FIELD_MAPPING_CONTENT,
+        titleField: process.env.FIELD_MAPPING_TITLE,
+        pageField: process.env.FIELD_MAPPING_PAGE
+      }
+    });
+  } catch (error) {
+    log('error', 'Fehler beim Aktualisieren der Feldmappings:', error);
+    return res.status(500).json({ error: 'Fehler beim Aktualisieren der Feldmappings' });
+  }
 });
 
 // Start the server
@@ -438,4 +656,5 @@ app.listen(PORT, () => {
   console.log(`Gesundheitscheck verfügbar unter http://localhost:${PORT}/health`);
   console.log(`Suchtest verfügbar unter http://localhost:${PORT}/api/test-search?q=ihre+suchanfrage`);
   console.log(`Such-Konfigurations-Debug verfügbar unter http://localhost:${PORT}/api/debug/search-config`);
+  console.log(`Index-Struktur-Debug verfügbar unter http://localhost:${PORT}/api/debug/index-structure`);
 });
