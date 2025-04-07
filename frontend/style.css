@@ -10,6 +10,10 @@
     --color-bot-bubble: #ffffff;
     --color-input-bg: #ffffff;
     --color-button-disabled: #cccccc;
+    --color-warning: #FFC107;
+    --color-error: #FF5252;
+    --color-source-bg: #f0f7ff;
+    --color-source-border: #0078d4;
     --radius-sm: 8px;
     --radius-lg: 16px;
     --radius-xl: 24px;
@@ -96,6 +100,22 @@ body {
     animation: fadeIn 0.3s ease-in-out;
 }
 
+/* System Message */
+.system-message {
+    background-color: #FFF8E1;
+    color: #795548;
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    border-left: 4px solid var(--color-warning);
+    max-width: 90%;
+    align-self: center;
+    margin: 8px 0;
+    font-size: 0.9rem;
+    text-align: center;
+    box-shadow: var(--shadow);
+    animation: fadeIn 0.3s ease-in-out;
+}
+
 /* Message Bubbles */
 .message {
     display: flex;
@@ -143,8 +163,8 @@ body {
 /* Source Citations */
 .source-tag {
     display: inline-block;
-    background-color: #f0f7ff;
-    border: 1px solid var(--color-primary);
+    background-color: var(--color-source-bg);
+    border: 1px solid var(--color-source-border);
     color: var(--color-primary);
     font-size: 0.75rem;
     padding: 1px 5px;
@@ -152,6 +172,12 @@ body {
     margin: 0 2px;
     font-weight: 500;
     opacity: 0.9;
+    transition: background-color 0.2s ease;
+}
+
+.source-tag:hover {
+    background-color: #e0eeff;
+    cursor: pointer;
 }
 
 .source-list {
@@ -177,6 +203,13 @@ body {
     align-items: center;
     margin-top: 3px;
     line-height: 1.4;
+    transition: background-color 0.2s ease;
+    padding: 2px 4px;
+    border-radius: 4px;
+}
+
+.source-item:hover {
+    background-color: var(--color-source-bg);
 }
 
 .source-icon {
@@ -289,6 +322,26 @@ textarea {
 #send-button svg {
     width: 18px;
     height: 18px;
+}
+
+/* Error Message Styling */
+.error-message {
+    color: var(--color-error);
+    font-size: 0.9rem;
+    padding: 10px;
+    margin: 10px 0;
+    background-color: rgba(255, 82, 82, 0.1);
+    border-left: 3px solid var(--color-error);
+    border-radius: 4px;
+}
+
+/* No Source Warning */
+.no-source-warning {
+    font-style: italic;
+    color: #ff6d00;
+    font-size: 0.8rem;
+    margin-top: 5px;
+    display: inline-block;
 }
 
 /* Responsive Adjustments */
