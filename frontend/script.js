@@ -23,6 +23,28 @@ function initializeChat() {
     
     // Adjust the textarea height on input
     messageInput.addEventListener('input', autoResizeTextarea);
+    
+    // Test backend connection
+    fetch(`${BACKEND_URL}/health`)
+        .then(response => response.json())
+        .then(data => {
+            console.log('Backend health check successful:', data);
+        })
+        .catch(error => {
+            console.warn('Backend health check failed:', error);
+            addSystemMessage('Warnung: Verbindung zum Backend-Server konnte nicht hergestellt werden. Bitte stellen Sie sicher, dass der Server läuft.');
+        });
+}
+
+/**
+ * Add a system message to the chat
+ */
+function addSystemMessage(message) {
+    const messageElement = document.createElement('div');
+    messageElement.classList.add('system-message');
+    messageElement.innerHTML = message;
+    messagesContainer.appendChild(messageElement);
+    scrollToBottom();
 }
 
 /**
@@ -87,6 +109,8 @@ async function sendMessage() {
     showTypingIndicator();
     
     try {
+        console.log('Sending message to backend:', message);
+        
         // Send message to backend
         const response = await fetch(API_ENDPOINT, {
             method: 'POST',
@@ -99,20 +123,39 @@ async function sendMessage() {
         // Check if response is ok
         if (!response.ok) {
             const errorData = await response.json();
+            console.error('Error response from backend:', errorData);
             throw new Error(errorData.error || 'Failed to get a response');
         }
         
         // Parse response data
         const data = await response.json();
+        console.log('Received response from backend:', data);
         
         // Hide typing indicator
         hideTypingIndicator();
         
         // Add bot message to chat with sources if available
         if (data.sources && data.sources.length > 0) {
+            console.log(`Found ${data.sources.length} sources in response`);
             addMessageWithSources('bot', data.reply, data.sources);
         } else {
-            addMessageToChat('bot', data.reply);
+            console.log('No sources found in response, using standard message display');
+            
+            // Check if the response contains source citations that weren't extracted
+            const containsCitations = /\(Quelle: [^,]+, Seite \d+\)/i.test(data.reply);
+            
+            if (containsCitations) {
+                console.log('Response contains source citations in text, extracting manually');
+                // Extract sources manually
+                const sources = extractSourcesFromText(data.reply);
+                if (sources.length > 0) {
+                    addMessageWithSources('bot', data.reply, sources);
+                } else {
+                    addMessageToChat('bot', data.reply);
+                }
+            } else {
+                addMessageToChat('bot', data.reply);
+            }
         }
         
     } catch (error) {
@@ -122,11 +165,32 @@ async function sendMessage() {
         hideTypingIndicator();
         
         // Add error message
-        addMessageToChat('bot', 'Sorry, I encountered an error. Please try again later.');
+        addMessageToChat('bot', `Sorry, ich habe einen Fehler festgestellt: ${error.message}. Bitte versuchen Sie es später erneut.`);
     }
     
     // Focus back on input
     messageInput.focus();
+}
+
+/**
+ * Extract sources from text manually
+ */
+function extractSourcesFromText(text) {
+    const sources = [];
+    const sourceRegex = /\(Quelle: ([^,]+), Seite (\d+)\)/g;
+    let match;
+    
+    while ((match = sourceRegex.exec(text)) !== null) {
+        const document = match[1].trim();
+        const page = parseInt(match[2]);
+        
+        // Only add unique sources
+        if (!sources.some(s => s.document === document && s.page === page)) {
+            sources.push({ document, page });
+        }
+    }
+    
+    return sources;
 }
 
 /**
@@ -195,7 +259,12 @@ function addMessageWithSources(sender, content, sources) {
  */
 function formatMessageContent(content) {
     // Replace newlines with <br> tags
-    return content.replace(/\n/g, '<br>');
+    let formatted = content.replace(/\n/g, '<br>');
+    
+    // Attempt to highlight any source citations anyway
+    formatted = formatMessageWithSources(formatted);
+    
+    return formatted;
 }
 
 /**
