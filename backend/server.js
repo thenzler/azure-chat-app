@@ -56,21 +56,26 @@ app.post('/api/chat', async (req, res) => {
         messages: [
           { 
             role: 'system', 
-            content: `Du bist ein hilfreicher Assistent, der ausschließlich auf Deutsch antwortet. Wenn dir eine Frage gestellt wird, durchsuche die indizierten Dokumente, um die relevantesten Informationen zu finden.
+            content: `Du bist ein präziser Recherche-Assistent, der NUR auf Deutsch antwortet und Informationen ausschließlich aus den bereitgestellten Dokumenten verwendet.
 
-Wenn du Informationen aus einem Dokument zitierst, gib immer die Quelle an, indem du den Dokumentnamen und wenn möglich die Seitenzahl in Klammern angibst, z.B.: (Quelle: Dokumentname, Seite X)
+WICHTIGSTE REGEL: Bei JEDER EINZELNEN Information, die du nennst, MUSST du die genaue Quelle in Klammern direkt dahinter angeben. Format: (Quelle: Dokumentname, Seite X)
 
-Falls mehrere Dokumente relevante Informationen enthalten, zitiere alle relevanten Quellen.
+Beispiel für eine korrekte Antwort:
+"Die BKB implementiert einen KI-Chatbot zur Verbesserung des Wissensmanagements. (Quelle: 2024_Safarik_Basler Kantonalbank_Bachelorarbeit, Seite 4) Kundenberater verbringen zwischen 5-12% ihrer Zeit mit Informationssuche. (Quelle: 2024_Safarik_Basler Kantonalbank_Bachelorarbeit, Seite 19)"
 
-Falls du keine relevanten Informationen in den indizierten Dokumenten finden kannst, teile dem Benutzer mit, dass diese Information nicht in den verfügbaren Dokumenten enthalten ist, und biete eine allgemeine Antwort an, wenn möglich.
+Formatierungsanweisungen:
+1. Gliedere deine Antwort in klare Absätze
+2. Stelle die wichtigsten Informationen an den Anfang
+3. Falls die bereitgestellten Dokumente keine Antwort enthalten, sage deutlich: "In den verfügbaren Dokumenten konnte ich keine Informationen zu dieser Frage finden."
+4. Verwende NIEMALS Erfindungen oder Informationen, die nicht in den Dokumenten stehen
+5. Nenne bei jeder Information die Quelle als (Quelle: Dokumentname, Seite X)
 
-Strukturiere deine Antworten klar und übersichtlich. Fasse Informationen präzise zusammen, behalte aber die wesentlichen Details bei.
-
-Antworte IMMER auf Deutsch, unabhängig davon, in welcher Sprache die Frage gestellt wurde.`
+Diese Anweisungen sind von höchster Wichtigkeit und dürfen unter keinen Umständen ignoriert werden.`
           },
           { role: 'user', content: message }
         ],
-        max_tokens: 800
+        max_tokens: 800,
+        temperature: 0.3 // Lower temperature for more consistent responses
       },
       {
         headers: {
@@ -80,9 +85,28 @@ Antworte IMMER auf Deutsch, unabhängig davon, in welcher Sprache die Frage gest
       }
     );
 
-    // Extract and return the bot's reply
+    // Extract the bot's reply
     const botReply = response.data.choices[0].message.content;
-    return res.json({ reply: botReply });
+    
+    // Extract sources for additional metadata
+    const sources = [];
+    const sourceRegex = /\(Quelle: ([^,]+), Seite (\d+)\)/g;
+    let match;
+    
+    while ((match = sourceRegex.exec(botReply)) !== null) {
+      const document = match[1].trim();
+      const page = parseInt(match[2]);
+      
+      // Only add unique sources
+      if (!sources.some(s => s.document === document && s.page === page)) {
+        sources.push({ document, page });
+      }
+    }
+    
+    return res.json({ 
+      reply: botReply,
+      sources: sources
+    });
     
   } catch (error) {
     console.error('Error communicating with Azure OpenAI API:', error.message);
