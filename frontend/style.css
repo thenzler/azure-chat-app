@@ -140,6 +140,51 @@ body {
     text-align: right;
 }
 
+/* Source Citations */
+.source-tag {
+    display: inline-block;
+    background-color: #f0f7ff;
+    border: 1px solid var(--color-primary);
+    color: var(--color-primary);
+    font-size: 0.75rem;
+    padding: 1px 5px;
+    border-radius: 4px;
+    margin: 0 2px;
+    font-weight: 500;
+    opacity: 0.9;
+}
+
+.source-list {
+    margin-top: 8px;
+    font-size: 0.8rem;
+    color: var(--color-text-light);
+    border-top: 1px solid var(--color-border);
+    padding-top: 8px;
+    margin-top: 8px;
+}
+
+.source-list-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+    color: var(--color-primary);
+    font-size: 0.75rem;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.source-item {
+    display: flex;
+    align-items: center;
+    margin-top: 3px;
+    line-height: 1.4;
+}
+
+.source-icon {
+    margin-right: 5px;
+    color: var(--color-primary);
+    font-size: 0.9rem;
+}
+
 /* Typing Indicator */
 .typing-indicator {
     display: none;
