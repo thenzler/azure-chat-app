@@ -72,24 +72,23 @@ const searchClient = new SearchClient(
   new AzureKeyCredential(process.env.AZURE_SEARCH_API_KEY)
 );
 
-// Enhanced system prompt with even stronger emphasis on citations
-const SYSTEM_PROMPT = `Du bist ein präziser Recherche-Assistent, der NUR auf Deutsch antwortet und AUSSCHLIESSLICH Informationen aus den bereitgestellten Dokumenten verwendet.
+// Modified system prompt to allow general knowledge fallback
+const SYSTEM_PROMPT = `Du bist ein präziser Recherche-Assistent, der NUR auf Deutsch antwortet.
 
-WICHTIGSTE REGEL: Bei ABSOLUT JEDER Information MUSST du die genaue Quelle in Klammern direkt dahinter angeben. Format: (Quelle: Dokumentname, Seite X)
+PRIORITÄT 1: Wenn Informationen in den bereitgestellten Dokumenten verfügbar sind:
+- Verwende AUSSCHLIESSLICH diese dokumentierten Informationen
+- Bei JEDER Information aus den Dokumenten MUSST du die genaue Quelle in Klammern direkt dahinter angeben
+- Format für Dokumentquellen: (Quelle: Dokumentname, Seite X)
 
-OHNE QUELLENANGABE DARFST DU KEINE INFORMATION NENNEN. Dies ist die wichtigste Regel und darf unter keinen Umständen ignoriert werden.
-
-Beispiel für eine korrekte Antwort:
-"Die BKB implementiert einen KI-Chatbot zur Verbesserung des Wissensmanagements. (Quelle: 2024_Safarik_Basler Kantonalbank_Bachelorarbeit, Seite 4) Kundenberater verbringen zwischen 5-12% ihrer Zeit mit Informationssuche. (Quelle: 2024_Safarik_Basler Kantonalbank_Bachelorarbeit, Seite 19)"
+PRIORITÄT 2: Wenn keine relevanten Informationen in den Dokumenten zu finden sind:
+- Gib klar an: "In den verfügbaren Dokumenten konnte ich keine spezifischen Informationen zu dieser Frage finden."
+- Danach kannst du eine allgemeine Antwort basierend auf deinem eigenen Wissen geben, aber kennzeichne diese klar mit: "[Allgemeinwissen]"
 
 Formatierungsanweisungen:
 1. Gliedere deine Antwort in klare Absätze
 2. Stelle die wichtigsten Informationen an den Anfang
-3. Falls die bereitgestellten Dokumente keine Antwort enthalten, sage deutlich: "In den verfügbaren Dokumenten konnte ich keine Informationen zu dieser Frage finden."
-4. Verwende NIEMALS Erfindungen oder Informationen, die nicht in den Dokumenten stehen
-5. Nenne bei JEDER Information die Quelle als (Quelle: Dokumentname, Seite X)
-
-Die Angabe der Quellen ist VERPFLICHTEND für jede einzelne Information.`;
+3. Nenne bei JEDER Information aus Dokumenten die Quelle als (Quelle: Dokumentname, Seite X)
+4. Trenne dokumentierte Informationen klar von allgemeinem Wissen`;
 
 // API endpoint to handle chat requests
 app.post('/api/chat', async (req, res) => {
@@ -196,45 +195,6 @@ async function handleChatWithDataFeature(message, res) {
     const sources = extractSourcesFromText(botReply);
     log('info', `${sources.length} eindeutige Quellen extrahiert`);
 
-    // Überprüfen, ob Quellenangaben fehlen
-    if (sources.length === 0 && botReply.length > 50 && !botReply.includes("keine Informationen zu dieser Frage finden")) {
-      log('warn', "Antwort enthält keine Quellenangaben, fordere Korrektur an");
-      
-      // Erneute Anfrage mit Hinweis auf fehlende Quellenangaben
-      const correctionMessages = [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: message },
-        { role: "assistant", content: botReply },
-        { role: "user", content: "Deine Antwort enthält keine Quellenangaben. Bitte wiederhole die gleiche Antwort, aber füge bei jeder Information die Quelle mit Seitenzahl im Format (Quelle: Dokumentname, Seite X) hinzu." }
-      ];
-
-      try {
-        log('debug', 'Sende Korrekturanfrage für fehlende Quellenangaben');
-        const correctionResult = await sendDirectApiRequest(
-          process.env.AZURE_OPENAI_ENDPOINT,
-          process.env.AZURE_OPENAI_API_KEY,
-          DEPLOYMENT_NAME,
-          correctionMessages,
-          [dataSource]
-        );
-
-        const correctedReply = correctionResult.choices[0].message.content;
-        log('info', `Korrigierte Antwort: "${correctedReply.substring(0, 100)}..."`);
-
-        // Quellen aus der korrigierten Antwort extrahieren
-        const correctedSources = extractSourcesFromText(correctedReply);
-        log('info', `${correctedSources.length} Quellen nach Korrektur gefunden`);
-
-        return res.json({
-          reply: correctedReply,
-          sources: correctedSources
-        });
-      } catch (correctionError) {
-        log('error', 'Fehler bei der Korrekturanfrage:', correctionError);
-        log('warn', 'Sende ursprüngliche Antwort ohne Korrektur');
-      }
-    }
-
     // Antwort senden
     return res.json({
       reply: botReply,
@@ -257,6 +217,8 @@ async function handleChatWithManualSearch(message, res) {
     const { contextText, documents } = await retrieveRelevantDocuments(message);
     
     // 2. Prüfen, ob Dokumente gefunden wurden
+    let userPrompt;
+    
     if (documents.length === 0) {
       log('info', "Keine relevanten Dokumente gefunden");
       
@@ -267,26 +229,38 @@ async function handleChatWithManualSearch(message, res) {
       const simpleSearch = await retrieveRelevantDocuments(simpleQuery);
       
       if (simpleSearch.documents.length === 0) {
-        return res.json({
-          reply: "In den verfügbaren Dokumenten konnte ich keine Informationen zu dieser Frage finden.",
-          sources: []
-        });
+        // ÄNDERUNG: Statt nur "keine Informationen" zurückzugeben, 
+        // erlauben wir dem Modell, auf sein allgemeines Wissen zurückzugreifen
+        userPrompt = `
+Zu folgender Frage wurden keine relevanten Informationen in den Dokumenten gefunden: "${message}"
+
+Bitte antworte wie folgt:
+1. Erwähne zuerst, dass keine spezifischen Informationen in den Dokumenten gefunden wurden
+2. Gib dann eine allgemeine Antwort basierend auf deinem Wissen, deutlich mit "[Allgemeinwissen]:" gekennzeichnet`;
       } else {
         // Mit den gefundenen Dokumenten fortfahren
         log('info', `Alternative Suche fand ${simpleSearch.documents.length} Dokumente`);
         contextText = simpleSearch.contextText;
         documents = simpleSearch.documents;
-      }
-    }
-    
-    // 3. Prompt mit Kontext erstellen
-    const userPrompt = `Beantworte folgende Frage basierend auf den gegebenen Dokumentausschnitten. Verwende NUR Informationen aus diesen Ausschnitten und gib für jede Information die Quelle mit Dokumentnamen und Seitenzahl an.
+        
+        userPrompt = `Beantworte folgende Frage basierend auf den gegebenen Dokumentausschnitten. Verwende NUR Informationen aus diesen Ausschnitten und gib für jede Information die Quelle mit Dokumentnamen und Seitenzahl an.
 
 Frage: ${message}
 
 Hier sind die relevanten Dokumentausschnitte:
 
 ${contextText}`;
+      }
+    } else {
+      // Normal mit gefundenen Dokumenten fortfahren
+      userPrompt = `Beantworte folgende Frage basierend auf den gegebenen Dokumentausschnitten. Verwende NUR Informationen aus diesen Ausschnitten und gib für jede Information die Quelle mit Dokumentnamen und Seitenzahl an.
+
+Frage: ${message}
+
+Hier sind die relevanten Dokumentausschnitte:
+
+${contextText}`;
+    }
 
     // 4. API-Anfrage an Azure OpenAI
     const requestPayload = {
@@ -323,45 +297,7 @@ ${contextText}`;
     const sources = extractSourcesFromText(botReply);
     log('info', `${sources.length} eindeutige Quellen extrahiert`);
     
-    // Fehlende Quellenangaben korrigieren
-    if (sources.length === 0 && botReply.length > 50 && !botReply.includes("keine Informationen zu dieser Frage finden")) {
-      log('warn', "Antwort enthält keine Quellenangaben, fordere Korrektur an");
-      
-      const correctionMessages = [
-        { role: 'system', content: SYSTEM_PROMPT },
-        { role: 'user', content: userPrompt },
-        { role: 'assistant', content: botReply },
-        { role: 'user', content: 'Deine Antwort enthält keine Quellenangaben. Bitte wiederhole die gleiche Antwort, aber füge bei jeder Information die Quelle mit Seitenzahl im Format (Quelle: Dokumentname, Seite X) hinzu.' }
-      ];
-      
-      try {
-        log('debug', 'Sende Korrekturanfrage für fehlende Quellenangaben');
-        
-        const correctionResult = await client.getChatCompletions(
-          DEPLOYMENT_NAME,
-          correctionMessages,
-          {
-            maxTokens: 800,
-            temperature: 0.0
-          }
-        );
-        
-        const correctedReply = correctionResult.choices[0].message.content;
-        log('info', `Korrigierte Antwort: "${correctedReply.substring(0, 100)}..."`);
-        
-        const correctedSources = extractSourcesFromText(correctedReply);
-        log('info', `${correctedSources.length} Quellen nach Korrektur gefunden`);
-        
-        return res.json({
-          reply: correctedReply,
-          sources: correctedSources
-        });
-      } catch (correctionError) {
-        log('error', 'Fehler bei der Korrekturanfrage:', correctionError);
-        log('warn', 'Sende ursprüngliche Antwort ohne Korrektur');
-      }
-    }
-    
+    // Antwort senden
     return res.json({
       reply: botReply,
       sources: sources
@@ -396,6 +332,7 @@ function extractSourcesFromText(text) {
 
 /**
  * Ruft relevante Dokumente aus dem Azure AI Search-Index ab
+ * Mit Token-Limit-Kontrolle
  */
 async function retrieveRelevantDocuments(query) {
   log('debug', `Suche nach relevanten Dokumenten für: "${query}"`);
@@ -404,7 +341,7 @@ async function retrieveRelevantDocuments(query) {
     // Suchoptionen konfigurieren
     let searchOptions = {
       select: ["content", "title", "filepath", "filename"],
-      top: 15,
+      top: 10, // Reduziert von 15 auf 10
       queryType: "full"
     };
     
@@ -422,8 +359,10 @@ async function retrieveRelevantDocuments(query) {
       
       const results = [];
       let contextText = "";
+      let totalTokenCount = 0;
+      const MAX_TOKEN_ESTIMATE = 10000; // Sicherer Grenzwert
       
-      // Dokumentergebnisse verarbeiten
+      // Dokumentergebnisse verarbeiten mit Token-Limit
       for await (const result of searchResults.results) {
         if (!result.document) {
           log('warn', "Warnung: Dokument ohne Inhalt gefunden");
@@ -438,11 +377,28 @@ async function retrieveRelevantDocuments(query) {
             pageNumber: result.document.filepath ? parseInt(result.document.filepath) || 1 : 1,
           };
           
+          // Tokengröße schätzen - ungefähr 4 Zeichen pro Token als grobe Schätzung
+          const estimatedTokens = Math.ceil(doc.content.length / 4);
+          
+          // Wenn das Token-Limit überschritten wird, nicht mehr hinzufügen
+          if (totalTokenCount + estimatedTokens > MAX_TOKEN_ESTIMATE) {
+            log('warn', `Token-Limit erreicht, überspringe restliche Dokumente`);
+            break;
+          }
+          
+          // Gegebenenfalls Inhalt kürzen, wenn einzelnes Dokument zu groß ist
+          if (estimatedTokens > 2000) { // Grenze für ein einzelnes Dokument
+            const charLimit = 2000 * 4; // ca. 8000 Zeichen
+            doc.content = doc.content.substring(0, charLimit) + "... [Dokument gekürzt wegen Größe]";
+            log('warn', `Großes Dokument gekürzt: ${doc.documentName}`);
+          }
+          
           // Kontext für die Anfrage aufbauen
           contextText += `Dokument: ${doc.documentName}\n`;
           contextText += `Seite: ${doc.pageNumber}\n`;
           contextText += `Inhalt: ${doc.content}\n\n`;
           
+          totalTokenCount += estimatedTokens;
           results.push(doc);
         } catch (docError) {
           log('error', "Fehler beim Verarbeiten eines Dokumentergebnisses:", docError);
@@ -450,22 +406,25 @@ async function retrieveRelevantDocuments(query) {
       }
       
       log('info', `${results.length} relevante Dokumentenabschnitte gefunden`);
+      log('debug', `Geschätzte Token-Anzahl: ${totalTokenCount}`);
       
       return { contextText, documents: results };
       
     } catch (searchError) {
       log('error', "Fehler bei der Suche:", searchError);
       
-      // Fallback auf einfachere Suche
-      log('warn', "Versuche einfachere Suche ohne spezielle Parameter");
+      // Fallback auf einfachere Suche mit reduzierten Ergebnissen
+      log('warn', "Versuche einfachere Suche mit reduzierten Parametern");
       
       const basicResults = await searchClient.search(query, {
         select: ["*"],
-        top: 10
+        top: 5 // Reduziert von 10 auf 5
       });
       
       const results = [];
       let contextText = "";
+      let totalTokenCount = 0;
+      const MAX_TOKEN_ESTIMATE = 10000;
       
       for await (const result of basicResults.results) {
         if (!result.document) continue;
@@ -481,21 +440,41 @@ async function retrieveRelevantDocuments(query) {
         // Seitennummer identifizieren (page_number, page)
         const pageField = docFields.find(f => f === 'page_number' || f === 'page' || f === 'filepath' || f.includes('page'));
         
+        const content = contentField ? result.document[contentField] : "Kein Inhalt";
+        
+        // Tokengröße schätzen
+        const estimatedTokens = Math.ceil(content.length / 4);
+        
+        // Wenn das Token-Limit überschritten wird, nicht mehr hinzufügen
+        if (totalTokenCount + estimatedTokens > MAX_TOKEN_ESTIMATE) {
+          log('warn', `Token-Limit erreicht, überspringe restliche Dokumente`);
+          break;
+        }
+        
+        // Dokument gegebenenfalls kürzen
+        let processedContent = content;
+        if (estimatedTokens > 2000) { // Grenze für ein einzelnes Dokument
+          const charLimit = 2000 * 4; // ca. 8000 Zeichen
+          processedContent = content.substring(0, charLimit) + "... [Dokument gekürzt wegen Größe]";
+          log('warn', `Großes Dokument gekürzt: ${result.document[titleField] || "Unbekannt"}`);
+        }
+        
         const doc = {
-          content: contentField ? result.document[contentField] : "Kein Inhalt",
+          content: processedContent,
           documentName: titleField ? result.document[titleField] : "Unbekanntes Dokument",
-          pageNumber: pageField ? parseInt(result.document[pageField]) || 1 : 1,
-          paragraphNumber: 0
+          pageNumber: pageField ? parseInt(result.document[pageField]) || 1 : 1
         };
         
         contextText += `Dokument: ${doc.documentName}\n`;
         contextText += `Seite: ${doc.pageNumber}\n`;
         contextText += `Inhalt: ${doc.content}\n\n`;
         
+        totalTokenCount += estimatedTokens;
         results.push(doc);
       }
       
       log('info', `${results.length} relevante Dokumentenabschnitte mit einfacher Suche gefunden`);
+      log('debug', `Geschätzte Token-Anzahl: ${totalTokenCount}`);
       
       return { contextText, documents: results };
     }
