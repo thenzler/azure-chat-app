@@ -145,22 +145,22 @@ async function handleChatWithDataFeature(message, res) {
     
     // Konfiguration für die Datenbankverbindung
     const azureSearchDataSource = {
-      type: process.env.AZURE_SEARCH_DATA_SOURCE_TYPE || "azure_search",
+      type: "azure_search",
       parameters: {
         endpoint: process.env.AZURE_SEARCH_ENDPOINT,
         key: process.env.AZURE_SEARCH_API_KEY,
-        indexName: process.env.AZURE_SEARCH_INDEX_NAME,
-        semanticConfiguration: process.env.USE_SEMANTIC_SEARCH === 'true' ? "default" : "",
-        queryType: process.env.USE_SEMANTIC_SEARCH === 'true' ? "semantic" : "simple",
-        fieldsMapping: {
-          contentFields: ["content"],
-          titleField: "document_name",
-          urlField: "",
-          filepathField: "",
-          vectorFields: []
+        index_name: process.env.AZURE_SEARCH_INDEX_NAME,
+        semantic_configuration: process.env.USE_SEMANTIC_SEARCH === 'true' ? "my-semantic-config" : "",
+        query_type: process.env.USE_SEMANTIC_SEARCH === 'true' ? "semantic" : "simple",
+        fields_mapping: {
+          content_fields: ["content"],
+          title_field: "title",
+          url_field: "url",
+          filepath_field: "filepath",
+          vector_fields: []
         },
-        inScope: true,
-        roleInformation: SYSTEM_PROMPT
+        in_scope: true,
+        role_information: SYSTEM_PROMPT
       }
     };
     
@@ -420,7 +420,7 @@ async function retrieveRelevantDocuments(query) {
   try {
     // Suchoptionen konfigurieren
     let searchOptions = {
-      select: ["content", "document_name", "page_number", "paragraph_number"],
+      select: ["content", "title", "filepath", "filename"],
       top: 15,
       queryType: "full"
     };
@@ -429,7 +429,7 @@ async function retrieveRelevantDocuments(query) {
     if (process.env.USE_SEMANTIC_SEARCH === 'true') {
       searchOptions.queryType = "semantic";
       searchOptions.queryLanguage = "de-de";
-      searchOptions.semanticConfiguration = "default";
+      searchOptions.semanticConfiguration = "my-semantic-config";
       log('debug', "Verwende semantische Suche");
     }
     
@@ -448,12 +448,11 @@ async function retrieveRelevantDocuments(query) {
         }
         
         try {
-          // Feldnamen anpassen (falls sie in Ihrem Index anders sind)
+          // Feldnamen anpassen (passend zum Index)
           const doc = {
-            content: result.document.content || result.document.text || "",
-            documentName: result.document.document_name || result.document.title || "Unbekanntes Dokument",
-            pageNumber: result.document.page_number || result.document.page || 1,
-            paragraphNumber: result.document.paragraph_number || result.document.paragraph || 0
+            content: result.document.content || "",
+            documentName: result.document.filename || result.document.title || "Unbekanntes Dokument",
+            pageNumber: result.document.filepath ? parseInt(result.document.filepath) || 1 : 1,
           };
           
           // Kontext für die Anfrage aufbauen
@@ -495,9 +494,9 @@ async function retrieveRelevantDocuments(query) {
         // Inhaltsfeld identifizieren (content oder text)
         const contentField = docFields.find(f => f === 'content' || f === 'text' || f.includes('content') || f.includes('text'));
         // Titel identifizieren (document_name, title, name)
-        const titleField = docFields.find(f => f === 'document_name' || f === 'title' || f === 'name' || f.includes('name') || f.includes('title'));
+        const titleField = docFields.find(f => f === 'document_name' || f === 'title' || f === 'filename' || f.includes('name') || f.includes('title'));
         // Seitennummer identifizieren (page_number, page)
-        const pageField = docFields.find(f => f === 'page_number' || f === 'page' || f.includes('page'));
+        const pageField = docFields.find(f => f === 'page_number' || f === 'page' || f === 'filepath' || f.includes('page'));
         
         const doc = {
           content: contentField ? result.document[contentField] : "Kein Inhalt",
@@ -594,8 +593,8 @@ app.get('/api/debug/index-structure', async (req, res) => {
     // Dynamische Felder identifizieren
     const identifiedFields = {
       contentField: fieldNames.find(f => f === 'content' || f === 'text' || f.includes('content') || f.includes('text')),
-      titleField: fieldNames.find(f => f === 'document_name' || f === 'title' || f === 'name' || f.includes('name') || f.includes('title')),
-      pageField: fieldNames.find(f => f === 'page_number' || f === 'page' || f.includes('page'))
+      titleField: fieldNames.find(f => f === 'document_name' || f === 'title' || f === 'filename' || f.includes('name') || f.includes('title')),
+      pageField: fieldNames.find(f => f === 'page_number' || f === 'page' || f === 'filepath' || f.includes('page'))
     };
     
     return res.json({
@@ -627,8 +626,8 @@ app.post('/api/config/field-mapping', (req, res) => {
     
     // Speichern Sie die Konfiguration in Umgebungsvariablen
     process.env.FIELD_MAPPING_CONTENT = contentField;
-    process.env.FIELD_MAPPING_TITLE = titleField || 'document_name';
-    process.env.FIELD_MAPPING_PAGE = pageField || 'page_number';
+    process.env.FIELD_MAPPING_TITLE = titleField || 'title';
+    process.env.FIELD_MAPPING_PAGE = pageField || 'filepath';
     
     log('info', `Feldmappings aktualisiert: content=${contentField}, title=${titleField}, page=${pageField}`);
     
