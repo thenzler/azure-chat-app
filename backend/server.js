@@ -143,37 +143,37 @@ async function handleChatWithDataFeature(message, res) {
   try {
     log('debug', 'Starte Chat mit nativer "Your Data"-Funktion');
     
-    // Konfiguration für die Datenbankverbindung
-    const azureSearchDataSource = {
+    // Direkte Datensource-Konfiguration (flachere Struktur)
+    const dataSource = {
       type: "azure_search",
       parameters: {
         endpoint: process.env.AZURE_SEARCH_ENDPOINT,
         key: process.env.AZURE_SEARCH_API_KEY,
-        index_name: process.env.AZURE_SEARCH_INDEX_NAME,
-        semantic_configuration: process.env.USE_SEMANTIC_SEARCH === 'true' ? "my-semantic-config" : "",
-        query_type: process.env.USE_SEMANTIC_SEARCH === 'true' ? "semantic" : "simple",
-        fields_mapping: {
-          content_fields: ["content"],
-          title_field: "title",
-          url_field: "url",
-          filepath_field: "filepath",
-          vector_fields: []
-        },
-        in_scope: true,
-        role_information: SYSTEM_PROMPT
+        indexName: process.env.AZURE_SEARCH_INDEX_NAME,
+        roleInformation: SYSTEM_PROMPT,
+        fieldsMapping: {
+          contentFields: ["content"],
+          titleField: "title", 
+          urlField: "url",
+          filepathField: "filepath"
+        }
       }
     };
     
     log('debug', 'Chat Konfiguration:', { 
       deployment: DEPLOYMENT_NAME,
       dataSource: {
-        ...azureSearchDataSource,
+        type: dataSource.type,
         parameters: {
-          ...azureSearchDataSource.parameters,
+          endpoint: dataSource.parameters.endpoint,
+          indexName: dataSource.parameters.indexName,
           key: "***" // API-Schlüssel aus Logs ausblenden
         }
       }
     });
+    
+    // Ausgabe des exakten JSON für Debug-Zwecke
+    log('debug', 'Exakte Datenquellenparameter JSON:', JSON.stringify(dataSource, null, 2));
 
     const chatCompletionOptions = {
       maxTokens: 800,
@@ -182,7 +182,7 @@ async function handleChatWithDataFeature(message, res) {
         { role: "system", content: SYSTEM_PROMPT },
         { role: "user", content: message }
       ],
-      dataSources: [azureSearchDataSource]
+      dataSources: [dataSource]
     };
 
     // Chat-Anfrage an Azure OpenAI senden
