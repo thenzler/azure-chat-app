@@ -9,6 +9,7 @@ Eine Full-Stack-Webanwendung, die als UI-Wrapper für Azure OpenAI API mit Dokum
 - Sichere Integration mit Azure OpenAI API
 - Dokumenten-Indexierung und -Referenzierung mit Azure AI Search
 - Quellenangaben für alle Informationen aus Dokumenten
+- Export von Suchindizes als CSV für Datenanalyse und Backup
 - Cross-Browser und Mobilgeräte-Kompatibilität
 - Auto-expandierendes Texteingabefeld
 
@@ -128,6 +129,36 @@ Die Anwendung kann Dokumente in verschiedenen Formaten (PDF, DOCX, TXT) indexier
 
 Der Indexer versucht, Seitennummern aus PDF-Dokumenten zu extrahieren. Bei anderen Dokumenttypen ohne Seitenunterbrechungen wird die Seitenzahl anhand der Position im Dokument geschätzt.
 
+## 📊 Index als CSV exportieren
+
+Die Anwendung ermöglicht das Exportieren aller Dokumente aus dem Azure AI Search Index als CSV-Datei für Datenanalyse, Backup oder Weiterverarbeitung.
+
+### Export-Prozess
+
+1. Stellen Sie sicher, dass die benötigten Azure AI Search-Umgebungsvariablen konfiguriert sind
+2. Führen Sie den Export-Befehl aus:
+   ```bash
+   npm run export-index
+   ```
+3. Die CSV-Datei wird im Verzeichnis `exports` gespeichert mit dem Dateinamen `knowledge-index_export_DATUM-ZEIT.csv`
+
+### CSV-Format
+
+Die exportierte CSV-Datei enthält folgende Spalten:
+- `id`: Die eindeutige ID des Dokuments im Index
+- `content`: Der Textinhalt des Dokuments
+- `title`: Der Titel des Dokuments
+- `filepath`: Der Dateipfad oder die Seitennummer
+- `filename`: Der Dateiname des Originaldokuments
+- `url`: Die URL zum Originaldokument in Azure Blob Storage (falls vorhanden)
+- `chunk_id`: Die ID des Textabschnitts innerhalb des Dokuments
+
+### Export-Optionen
+
+Die Export-Optionen können in der Datei `index-exporter.js` angepasst werden, einschließlich:
+- `exportDir`: Das Verzeichnis für den Export (Standard: "./exports")
+- `maxResults`: Die maximale Anzahl an zu exportierenden Dokumenten (Standard: 1000)
+
 ## 🧪 Testen
 
 ### Backend
@@ -175,6 +206,12 @@ Die Indexierungsoptionen können in der Datei `document-indexer.js` angepasst we
 - `chunkSize`: Die Anzahl der Zeichen pro Abschnitt (Standard: 1000)
 - `chunkOverlap`: Die Überlappung zwischen Abschnitten (Standard: 200)
 - `documentsDir`: Das Verzeichnis, in dem Dokumente gespeichert werden (Standard: "./documents")
+
+### Export-Optionen
+
+Die Optionen für den CSV-Export können in der Datei `index-exporter.js` angepasst werden, einschließlich:
+- `exportDir`: Das Verzeichnis für den CSV-Export (Standard: "./exports")
+- `maxResults`: Die maximale Anzahl an Dokumenten, die exportiert werden sollen (Standard: 1000)
 
 ## 🤝 Mitwirken
 
