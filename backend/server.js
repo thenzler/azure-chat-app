@@ -5,6 +5,7 @@ const axios = require('axios');
 const { AzureKeyCredential } = require('@azure/core-auth');
 const { OpenAIClient } = require('@azure/openai');
 const { SearchClient } = require('@azure/search-documents');
+const { sendDirectApiRequest } = require('./directAzureApi');
 require('dotenv').config();
 
 // Initialize Express app
@@ -106,7 +107,7 @@ app.post('/api/chat', async (req, res) => {
       const useDataFeature = process.env.USE_AZURE_OPENAI_DATA_FEATURE === 'true';
       
       if (useDataFeature) {
-        log('info', 'Verwende native Azure OpenAI "Your Data"-Funktion');
+        log('info', 'Verwende native Azure OpenAI "Your Data"-Funktion mit direktem API-Aufruf');
         await handleChatWithDataFeature(message, res);
       } else {
         log('info', 'Verwende manuelle Suche und Kontext-Erstellung');
@@ -138,12 +139,13 @@ app.post('/api/chat', async (req, res) => {
 
 /**
  * Verarbeitet Chat-Anfragen mit der nativen Azure OpenAI "Your Data"-Funktion
+ * mit direktem API-Aufruf
  */
 async function handleChatWithDataFeature(message, res) {
   try {
-    log('debug', 'Starte Chat mit nativer "Your Data"-Funktion');
+    log('debug', 'Starte Chat mit nativer "Your Data"-Funktion über direkten API-Aufruf');
     
-    // Direkte Datensource-Konfiguration (flachere Struktur)
+    // Datenquelle mit korrekten camelCase-Namen für die direkten API-Aufrufe
     const dataSource = {
       type: "azure_search",
       parameters: {
@@ -155,48 +157,33 @@ async function handleChatWithDataFeature(message, res) {
           contentFields: ["content"],
           titleField: "title", 
           urlField: "url",
-          filepathField: "filepath"
+          filepathField: "filepath",
+          vectorFields: []
         }
       }
     };
     
-    log('debug', 'Chat Konfiguration:', { 
-      deployment: DEPLOYMENT_NAME,
-      dataSource: {
-        type: dataSource.type,
-        parameters: {
-          endpoint: dataSource.parameters.endpoint,
-          indexName: dataSource.parameters.indexName,
-          key: "***" // API-Schlüssel aus Logs ausblenden
-        }
-      }
-    });
+    // Anfrage-Nachrichten
+    const messages = [
+      { role: "system", content: SYSTEM_PROMPT },
+      { role: "user", content: message }
+    ];
     
-    // Ausgabe des exakten JSON für Debug-Zwecke
-    log('debug', 'Exakte Datenquellenparameter JSON:', JSON.stringify(dataSource, null, 2));
-
-    const chatCompletionOptions = {
-      maxTokens: 800,
-      temperature: 0.1,
-      messages: [
-        { role: "system", content: SYSTEM_PROMPT },
-        { role: "user", content: message }
-      ],
-      dataSources: [dataSource]
-    };
-
-    // Chat-Anfrage an Azure OpenAI senden
-    log('info', 'Sende Anfrage an Azure OpenAI mit Datenquelle');
-    const result = await client.getChatCompletions(
+    // Direkter API-Aufruf statt SDK
+    log('info', 'Sende Anfrage an Azure OpenAI mit Datenquelle via direktem API-Aufruf');
+    const result = await sendDirectApiRequest(
+      process.env.AZURE_OPENAI_ENDPOINT,
+      process.env.AZURE_OPENAI_API_KEY,
       DEPLOYMENT_NAME,
-      chatCompletionOptions.messages,
-      chatCompletionOptions
+      messages,
+      [dataSource]
     );
-
+    
+    // Antwort verarbeiten
     if (!result || !result.choices || result.choices.length === 0) {
-      log('error', 'Ungültige Antwort von Azure OpenAI:', result);
+      log('error', 'Ungültige Antwort von Azure OpenAI API:', result);
       return res.status(500).json({
-        error: 'Ungültige Antwort von Azure OpenAI',
+        error: 'Ungültige Antwort von Azure OpenAI API',
         details: 'Die Antwort enthielt keine erwarteten Daten'
       });
     }
@@ -221,18 +208,14 @@ async function handleChatWithDataFeature(message, res) {
         { role: "user", content: "Deine Antwort enthält keine Quellenangaben. Bitte wiederhole die gleiche Antwort, aber füge bei jeder Information die Quelle mit Seitenzahl im Format (Quelle: Dokumentname, Seite X) hinzu." }
       ];
 
-      const correctionOptions = {
-        ...chatCompletionOptions,
-        messages: correctionMessages,
-        temperature: 0 // Niedrigere Temperatur für deterministische Antwort
-      };
-
       try {
         log('debug', 'Sende Korrekturanfrage für fehlende Quellenangaben');
-        const correctionResult = await client.getChatCompletions(
+        const correctionResult = await sendDirectApiRequest(
+          process.env.AZURE_OPENAI_ENDPOINT,
+          process.env.AZURE_OPENAI_API_KEY,
           DEPLOYMENT_NAME,
-          correctionOptions.messages,
-          correctionOptions
+          correctionMessages,
+          [dataSource]
         );
 
         const correctedReply = correctionResult.choices[0].message.content;
